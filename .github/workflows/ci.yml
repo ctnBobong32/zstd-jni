@@ -209,7 +209,7 @@ jobs:
       - name: 配置Java21编译环境
         uses: actions/setup-java@v5
         with:
-          java-version: 21
+          java-version: 11
           distribution: zulu
 
       - name: 初始化Android SDK + NDK
