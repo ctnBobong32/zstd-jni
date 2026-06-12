@@ -189,7 +189,7 @@ jobs:
           update: true
 
       - name: 交叉编译Windows ARM64 DLL文件
-        run: /opt/aarch64-w64-mingw32/bin/aarch64-w64-mingw32-clang -shared -D_JNI_IMPLEMENTATION_ -Wl,--kill-at  -O3 -DZSTD_LEGACY_SUPPORT=4 -DZSTD_MULTITHREAD=1 -I./src/windows/include -I./jni -I./src/main/native -I./src/main/native/common -I./src/main/native/legacy -std=c99 -o libzstd-jni-$(cat version).dll ./src/main/native/*.c ./src/main/native/legacy/*.c ./src/main/native/common/*.c ./src/main/native/compress/*.c ./src/main/native/decompress/*.[cS] ./src/main/native/dictBuilder/*.c
+        run: /opt/aarch64-w64-mingw32/bin/aarch64-w64-mingw32-clang -shared -D_JNI_IMPLEMENTATION_ -Wl,--kill-at  -O3 -DZSTD_LEGACY_SUPPORT=4 -DZSTD_MULTITHREAD=1 -I./src/windows/include -I./jni -I./src/main/native -I./src/main/native/common -I./src/main/native/legacy -std=c99 -o libzstd-jni-$(cat version).dll ./src/main/native/*.c ./src/main/native/legacy/*.c ./src/main/native/common/*.c src/main/native/compress/*.c src/main/native/decompress/*.[cS] src/main/native/dictBuilder/*.c
 
       - name: 上传ARM64 Windows DLL至S3(仅master分支)
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
@@ -200,7 +200,7 @@ jobs:
         run: aws s3 cp libzstd-jni-$(cat version).dll s3://zstd-jni/github/win/aarch64/libzstd-jni-$(cat version).dll
 
   # Android 编译任务：内嵌so编译脚本，无需外部sh文件
-    android:
+  android:
     runs-on: ubuntu-latest
     steps:
       - name: 检出项目源码
@@ -276,4 +276,3 @@ jobs:
         run: |
           nativeVer=$(cat version)
           aws s3 cp target/aar/zstd-jni.aar s3://zstd-jni/github/android/zstd-jni-${nativeVer}.aar
-
