@@ -199,7 +199,7 @@ jobs:
           AWS_DEFAULT_REGION: "us-east-1"
         run: aws s3 cp libzstd-jni-$(cat version).dll s3://zstd-jni/github/win/aarch64/libzstd-jni-$(cat version).dll
 
-  # Android 编译任务：内嵌so编译脚本，无需外部sh文件
+  # Android 编译任务：内嵌so编译脚本，无需外部sh文件（已修复）
   android:
     runs-on: ubuntu-latest
     steps:
@@ -226,14 +226,6 @@ jobs:
 
       - name: 本地发布sbt-java-module-info依赖插件
         run: pushd ./sbt-java-module-info; ./sbt publishLocal; popd
-
-      # 修复：先装gradle生成wrapper
-      - name: 初始化Gradle包装器
-        run: |
-          apt update && apt install gradle -y
-          gradle wrapper
-          chmod +x gradlew
-          ./gradlew --version
 
       - name: 编译Android四大架构JNI动态库so
         run: |
