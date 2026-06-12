@@ -1,174 +1,276 @@
-name: CI
-on: [push, pull_request]
+# 工作流名称：zstd-jni 全平台编译CI流水线
+name: zstd-jni 全平台编译CI流水线
+# 触发条件：推送、PR、页面手动运行
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
 jobs:
-    linux:
-        strategy:
-            fail-fast: false
-            matrix:
-                include: [
-                    { os: ubuntu-latest, target: linux/amd64 }
-                ]
-        runs-on: ${{ matrix.os }}
-        steps:
-        - uses: actions/checkout@v5
-        - uses: actions/setup-java@v5
-          with:
-            java-version: 11
-            distribution: zulu
+  # Linux 平台编译任务
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [
+          { os: ubuntu-latest, target: linux/amd64 }
+        ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: 检出项目代码
+        uses: actions/checkout@v5
 
-        - name: Install sbt-java-module-info
-          run: pushd ./sbt-java-module-info; ./sbt publishLocal; popd
+      - name: 配置Java21环境(Zulu发行版)
+        uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: zulu
 
-        - name: Compile
-          run: ./sbt compile
+      - name: 本地发布sbt-java-module-info插件
+        run: pushd ./sbt-java-module-info; ./sbt publishLocal; popd
 
-        - name: Env
-          run: echo "nativeJniVersion=`cat version`" >> $GITHUB_ENV
+      - name: SBT编译项目主体
+        run: ./sbt compile
 
-        - name: Inspect
-          run: ldd target/classes/${{ matrix.target }}/libzstd-jni-${nativeJniVersion}.so
+      - name: 导出JNI库版本号至环境变量
+        run: echo "nativeJniVersion=`cat version`" >> $GITHUB_ENV
 
-        - name: Test
-          run: ./sbt jacoco
+      - name: 检查Linux动态链接库依赖
+        run: ldd target/classes/${{ matrix.target }}/libzstd-jni-${nativeJniVersion}.so
 
-        - name: Upload coverage
-          uses: codecov/codecov-action@v4
+      - name: 单元测试+覆盖率统计
+        run: ./sbt jacoco
 
-        - name: Deploy
-          if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
-          env:
-            AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-            AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            AWS_DEFAULT_REGION: "us-east-1"
-          run: aws s3 cp --recursive target/classes/${{ matrix.target }} s3://zstd-jni/github/${{ matrix.target }}
+      - name: 上传测试覆盖率报告
+        uses: codecov/codecov-action@v4
 
-    macos:
-        strategy:
-            fail-fast: false
-            matrix:
-                include: [
-                  { os: macos-15-intel, host_arch: x86_64,  macos_target: x86_64-apple-macos10.12, version_min: 10.12, target_arch: x86_64  },
-                  { os: macos-latest,   host_arch: aarch64, macos_target: arm64-apple-macos11,     version_min: 11,    target_arch: aarch64 }
-                ]
-        runs-on: ${{ matrix.os }}
-        steps:
-        - uses: actions/checkout@v5
-        - uses: actions/setup-java@v5
-          with:
-            java-version: 11
-            distribution: zulu
-        - uses: maxim-lobanov/setup-xcode@v1
-          with:
-            xcode-version: latest
+      - name: 推送Linux原生库至AWS S3(仅master分支推送)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: "us-east-1"
+        run: aws s3 cp --recursive target/classes/${{ matrix.target }} s3://zstd-jni/github/${{ matrix.target }}
 
-        - name: Inspect arch
-          run: arch
+  # macOS 平台编译任务
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [
+          { os: macos-15-intel, host_arch: x86_64,  macos_target: x86_64-apple-macos10.12, version_min: 10.12, target_arch: x86_64  },
+          { os: macos-latest,   host_arch: aarch64, macos_target: arm64-apple-macos11,     version_min: 11,    target_arch: aarch64 }
+        ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: 检出项目代码
+        uses: actions/checkout@v5
 
-        - name: Install sbt-java-module-info
-          run: pushd ./sbt-java-module-info; ./sbt publishLocal; popd
+      - name: 配置Java21环境(Zulu发行版)
+        uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: zulu
 
-        - name: Compile
-          env:
-              CC: cc -target ${{ matrix.macos_target }} -mmacosx-version-min=${{ matrix.version_min }}
-          run: ./sbt compile
+      - name: 安装最新版Xcode编译工具链
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest
 
-        - name: Env
-          run: echo "nativeJniVersion=`cat version`" >> $GITHUB_ENV
+      - name: 查看当前系统CPU架构
+        run: arch
 
-        - name: Inspect classes
-          run: ls -al target/classes/darwin
+      - name: 本地发布sbt-java-module-info插件
+        run: pushd ./sbt-java-module-info; ./sbt publishLocal; popd
 
-        - name: Inspect
-          run: otool -L target/classes/darwin/${{ matrix.target_arch }}/libzstd-jni-${nativeJniVersion}.dylib
+      - name: 指定macOS编译参数并执行SBT编译
+        env:
+          CC: cc -target ${{ matrix.macos_target }} -mmacosx-version-min=${{ matrix.version_min }}
+        run: ./sbt compile
 
-        - name: Symbols
-          run: nm -m target/classes/darwin/${{ matrix.target_arch }}/libzstd-jni-${nativeJniVersion}.dylib
+      - name: 导出JNI库版本号至环境变量
+        run: echo "nativeJniVersion=`cat version`" >> $GITHUB_ENV
 
-        - name: Test
-          run: ./sbt test
+      - name: 列出Darwin架构编译产物目录
+        run: ls -al target/classes/darwin
 
-        - name: Upload coverage
-          uses: codecov/codecov-action@v4
+      - name: 检查dylib库链接依赖
+        run: otool -L target/classes/darwin/${{ matrix.target_arch }}/libzstd-jni-${nativeJniVersion}.dylib
 
-        - name: Deploy
-          if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
-          env:
-            AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-            AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            AWS_DEFAULT_REGION: "us-east-1"
-          run: aws s3 cp --recursive target/classes/darwin/${{ matrix.host_arch }} s3://zstd-jni/github/darwin/${{ matrix.target_arch }}
+      - name: 查看动态库导出符号表
+        run: nm -m target/classes/darwin/${{ matrix.target_arch }}/libzstd-jni-${nativeJniVersion}.dylib
 
-    windows:
-        strategy:
-            fail-fast: false
-            matrix:
-                include: [
-                    { msystem: MINGW64, arch: x86_64, java_arch: x64, target: 'win\amd64', s3_path: win/amd64 },
-                    { msystem: MINGW32, arch: i686,   java_arch: x86, target: 'win\x86',   s3_path: win/x86 }
-                ]
-        runs-on: windows-latest
-        defaults:
-            run:
-                shell: msys2 {0}
-        steps:
-        - uses: actions/checkout@v5
-        - uses: msys2/setup-msys2@v2
-          with:
-            msystem: ${{ matrix.msystem }}
-            install: git base-devel mingw-w64-${{ matrix.arch }}-toolchain
-            path-type: inherit
-            update: true
-        - uses: actions/setup-java@v5
-          with:
-            java-version: 11
-            distribution: zulu
-            architecture: ${{ matrix.java_arch }}
+      - name: 执行单元测试
+        run: ./sbt test
 
-        - name: Check Java version
-          run: java -version
+      - name: 上传测试覆盖率报告
+        uses: codecov/codecov-action@v4
 
-        - name: Install sbt-java-module-info
-          run: cd ./sbt-java-module-info; ./sbt publishLocal
+      - name: 推送macOS原生库至AWS S3(仅master分支推送)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: "us-east-1"
+        run: aws s3 cp --recursive target/classes/darwin/${{ matrix.host_arch }} s3://zstd-jni/github/darwin/${{ matrix.target_arch }}
 
-        - name: Compile
-          run: ./sbt compile
+  # Windows 32/64位编译任务
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [
+          { msystem: MINGW64, arch: x86_64, java_arch: x64, target: 'win\amd64', s3_path: win/amd64 },
+          { msystem: MINGW32, arch: i686,   java_arch: x86, target: 'win\x86',   s3_path: win/x86 }
+        ]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: 检出项目代码
+        uses: actions/checkout@v5
 
-        - name: Test
-          run: ./sbt test
+      - name: 初始化MSYS2编译环境 + MinGW编译工具链
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          install: git base-devel mingw-w64-${{ matrix.arch }}-toolchain
+          path-type: inherit
+          update: true
 
-        - name: Upload coverage
-          uses: codecov/codecov-action@v4
+      - name: 配置对应架构Java11环境
+        uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: zulu
+          architecture: ${{ matrix.java_arch }}
 
-        - name: Deploy
-          if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
-          shell: cmd
-          env:
-            AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-            AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            AWS_DEFAULT_REGION: "us-east-1"
-          run: 'aws s3 cp --recursive target\classes\${{ matrix.target }} s3://zstd-jni/github/${{ matrix.s3_path }}'
+      - name: 校验Java运行环境
+        run: java -version
 
-    windows-cross:
-        runs-on: windows-latest
-        defaults:
-            run:
-                shell: msys2 {0}
-        steps:
-        - uses: actions/checkout@v5
-        - uses: msys2/setup-msys2@v2
-          with:
-            msystem: mingw64
-            install: git base-devel mingw-w64-cross-clang
-            path-type: inherit
-            update: true
+      - name: 本地发布sbt-java-module-info插件
+        run: cd ./sbt-java-module-info; ./sbt publishLocal
 
-        - name: Compile
-          run: /opt/aarch64-w64-mingw32/bin/aarch64-w64-mingw32-clang -shared -D_JNI_IMPLEMENTATION_ -Wl,--kill-at  -O3 -DZSTD_LEGACY_SUPPORT=4 -DZSTD_MULTITHREAD=1 -I./src/windows/include -I./jni -I./src/main/native -I./src/main/native/common -I./src/main/native/legacy -std=c99 -o libzstd-jni-$(cat version).dll ./src/main/native/*.c ./src/main/native/legacy/*.c ./src/main/native/common/*.c ./src/main/native/compress/*.c ./src/main/native/decompress/*.[cS] ./src/main/native/dictBuilder/*.c
+      - name: SBT编译项目
+        run: ./sbt compile
 
-        - name: Deploy
-          if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
-          env:
-            AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-            AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            AWS_DEFAULT_REGION: "us-east-1"
-          run: aws s3 cp libzstd-jni-$(cat version).dll s3://zstd-jni/github/win/aarch64/libzstd-jni-$(cat version).dll
+      - name: 执行单元测试
+        run: ./sbt test
+
+      - name: 上传测试覆盖率报告
+        uses: codecov/codecov-action@v4
+
+      - name: 推送Windows DLL至AWS S3(仅master分支推送)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
+        shell: cmd
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: "us-east-1"
+        run: 'aws s3 cp --recursive target\classes\${{ matrix.target }} s3://zstd-jni/github/${{ matrix.s3_path }}'
+
+  # Windows交叉编译ARM64版本DLL
+  windows-cross:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: 检出项目代码
+        uses: actions/checkout@v5
+
+      - name: MSYS2环境 + 交叉编译Clang工具链
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: mingw64
+          install: git base-devel mingw-w64-cross-clang
+          path-type: inherit
+          update: true
+
+      - name: 交叉编译Windows ARM64 DLL文件
+        run: /opt/aarch64-w64-mingw32/bin/aarch64-w64-mingw32-clang -shared -D_JNI_IMPLEMENTATION_ -Wl,--kill-at  -O3 -DZSTD_LEGACY_SUPPORT=4 -DZSTD_MULTITHREAD=1 -I./src/windows/include -I./jni -I./src/main/native -I./src/main/native/common -I./src/main/native/legacy -std=c99 -o libzstd-jni-$(cat version).dll ./src/main/native/*.c ./src/main/native/legacy/*.c ./src/main/native/common/*.c ./src/main/native/compress/*.c ./src/main/native/decompress/*.[cS] ./src/main/native/dictBuilder/*.c
+
+      - name: 上传ARM64 Windows DLL至S3(仅master分支)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: "us-east-1"
+        run: aws s3 cp libzstd-jni-$(cat version).dll s3://zstd-jni/github/win/aarch64/libzstd-jni-$(cat version).dll
+
+  # Android 编译任务：内嵌so编译脚本，无需外部sh文件
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出项目源码
+        uses: actions/checkout@v5
+
+      - name: 配置Java11编译环境
+        uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: zulu
+
+      - name: 初始化Android SDK + NDK编译环境
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 33
+          build-tools: "34.0.0"
+          ndk-version: "26.2.11394342"
+
+      - name: 导出NDK路径至系统环境变量
+        run: |
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/26.2.11394342" >> $GITHUB_ENV
+          echo "PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_PATH
+
+      - name: 本地发布sbt-java-module-info依赖插件
+        run: pushd ./sbt-java-module-info; ./sbt publishLocal; popd
+
+      - name: 初始化Gradle包装器
+        run: |
+          chmod +x gradlew
+          ./gradlew --version
+
+      # ========== 内嵌你写的Android so编译脚本 ==========
+      - name: 编译Android四大架构JNI动态库so
+        run: |
+          #!/bin/bash
+          set -e
+          VER=$(cat version)
+          NDK=$ANDROID_NDK_ROOT
+          OUT_BASE=src/main/resources/android
+          ARCHS=(
+            arm64-v8a  aarch64-linux-android24-clang
+            x86_64     x86_64-linux-android24-clang
+            armeabi-v7a armv7a-linux-android24-clang
+            x86        i686-linux-android24-clang
+          )
+          for ((i=0; i<${#ARCHS[@]}; i+=2)); do
+            ABI=${ARCHS[$i]}
+            CC=${ARCHS[$i+1]}
+            OUT_DIR=${OUT_BASE}/${ABI}
+            mkdir -p ${OUT_DIR}
+            ${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${CC} \
+              -shared -fPIC -D_JNI_IMPLEMENTATION_ -O3 -DZSTD_MULTITHREAD=1 -DZSTD_LEGACY_SUPPORT=4 \
+              -Ijni -Isrc/main/native -Isrc/main/native/common -Isrc/main/native/legacy \
+              -std=c99 \
+              -o ${OUT_DIR}/libzstd-jni-${VER}.so \
+              src/main/native/*.c src/main/native/legacy/*.c src/main/native/common/*.c src/main/native/compress/*.c src/main/native/decompress/*.[cS] src/main/native/dictBuilder/*.c
+          done
+
+      - name: SBT编译项目并执行AAR打包任务
+        run: ./sbt "compile; aarTask"
+
+      - name: 查看生成的Android AAR产物
+        run: ls -la target/aar/*.aar
+
+      - name: 上传Android AAR包至AWS S3(仅master分支生效)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: "us-east-1"
+        run: |
+          nativeVer=$(cat version)
+          aws s3 cp target/aar/zstd-jni.aar s3://zstd-jni/github/android/zstd-jni-${nativeVer}.aar
