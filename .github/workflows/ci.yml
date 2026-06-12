@@ -199,7 +199,7 @@ jobs:
           AWS_DEFAULT_REGION: "us-east-1"
         run: aws s3 cp libzstd-jni-$(cat version).dll s3://zstd-jni/github/win/aarch64/libzstd-jni-$(cat version).dll
 
-  # Android 编译任务（使用根目录 build.gradle + CMake 构建 AAR）
+  # Android 编译任务（使用 Gradle 5.1.1 + CMake 构建 AAR）
   android:
     runs-on: ubuntu-latest
     steps:
@@ -219,11 +219,10 @@ jobs:
           build-tools: "34.0.0"
           ndk-version: "26.2.11394342"
 
-      - name: 修复 build.gradle 以兼容新版 Gradle 和 NDK
+      - name: 修复 build.gradle 以兼容新版 NDK 和依赖仓库
         run: |
-          # 备份原文件
           cp build.gradle build.gradle.bak
-          # 替换 jcenter() 为 mavenCentral()
+          # jcenter() -> mavenCentral()
           sed -i 's/jcenter()/mavenCentral()/g' build.gradle
           # minSdkVersion 16 -> 21
           sed -i 's/minSdkVersion 16/minSdkVersion 21/g' build.gradle
@@ -235,19 +234,28 @@ jobs:
           sed -i '/androidTestImplementation/d' build.gradle
           echo "Fixed build.gradle"
 
-      - name: 生成 Gradle Wrapper（如果不存在）
+      - name: 设置 Gradle Wrapper 使用兼容版本 5.1.1
         run: |
+          mkdir -p gradle/wrapper
+          cat > gradle/wrapper/gradle-wrapper.properties << EOF
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-5.1.1-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          # 如果已经存在 gradlew，保留；否则从 Gradle 5.1.1 下载生成
           if [ ! -f gradlew ]; then
-            gradle wrapper
+            curl -L https://raw.githubusercontent.com/gradle/gradle/v5.1.1/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
+            curl -L https://raw.githubusercontent.com/gradle/gradle/v5.1.1/gradlew -o gradlew
+            chmod +x gradlew
           fi
-          chmod +x gradlew
 
       - name: 构建 Android AAR
         run: ./gradlew assembleRelease
 
       - name: 查看生成的 AAR 文件
-        run: |
-          find . -name "*.aar" -type f
+        run: find . -name "*.aar" -type f
 
       - name: 上传 Android AAR 到 AWS S3（仅 master 分支）
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
