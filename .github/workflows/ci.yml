@@ -199,7 +199,7 @@ jobs:
           AWS_DEFAULT_REGION: "us-east-1"
         run: aws s3 cp libzstd-jni-$(cat version).dll s3://zstd-jni/github/win/aarch64/libzstd-jni-$(cat version).dll
 
-  # Android 编译任务（已修复NDK clang调用方式）
+  # Android 编译任务（使用 Gradle + CMake 构建 AAR）
   android:
     runs-on: ubuntu-latest
     steps:
@@ -212,61 +212,58 @@ jobs:
           java-version: 21
           distribution: zulu
 
-      - name: 初始化Android SDK + NDK编译环境
+      - name: 初始化Android SDK + NDK
         uses: android-actions/setup-android@v3
         with:
           api-level: 33
           build-tools: "34.0.0"
           ndk-version: "26.2.11394342"
 
-      - name: 导出NDK路径至系统环境变量
+      - name: 修复 build.gradle 以兼容新版 Gradle 和 NDK
         run: |
-          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/26.2.11394342" >> $GITHUB_ENV
-          echo "PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_PATH
+          # 备份原文件
+          cp android/build.gradle android/build.gradle.bak
+          # 替换 jcenter() 为 mavenCentral()（jcenter 已废弃）
+          sed -i 's/jcenter()/mavenCentral()/g' android/build.gradle
+          # minSdkVersion 从 16 提升到 21（NDK r26 要求）
+          sed -i 's/minSdkVersion 16/minSdkVersion 21/g' android/build.gradle
+          # 增加 ndkVersion 指定，避免使用默认 NDK
+          sed -i '/defaultConfig {/a\            ndkVersion "26.2.11394342"' android/build.gradle
+          # compileSdkVersion 从 26 提升到 33
+          sed -i 's/compileSdkVersion 26/compileSdkVersion 33/g' android/build.gradle
+          # 移除 androidTestImplementation 行（避免 support 库冲突）
+          sed -i '/androidTestImplementation/d' android/build.gradle
+          echo "Fixed build.gradle"
 
-      - name: 本地发布sbt-java-module-info依赖插件
-        run: pushd ./sbt-java-module-info; ./sbt publishLocal; popd
-
-      - name: 编译Android四大架构JNI动态库so
+      - name: 生成 Gradle Wrapper（如果不存在）
         run: |
-          #!/bin/bash
-          set -e
-          VER=$(cat version)
-          NDK=$ANDROID_NDK_ROOT
-          CLANG=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang
-          OUT_BASE=src/main/resources/android
-          # 架构映射：ABI -> 目标三元组
-          ARCHS=(
-            "arm64-v8a aarch64-linux-android24"
-            "x86_64 x86_64-linux-android24"
-            "armeabi-v7a armv7a-linux-android24"
-            "x86 i686-linux-android24"
-          )
-          for entry in "${ARCHS[@]}"; do
-            ABI=${entry% *}
-            TARGET=${entry#* }
-            OUT_DIR=${OUT_BASE}/${ABI}
-            mkdir -p ${OUT_DIR}
-            ${CLANG} --target=${TARGET} \
-              -shared -fPIC -D_JNI_IMPLEMENTATION_ -O3 -DZSTD_MULTITHREAD=1 -DZSTD_LEGACY_SUPPORT=4 \
-              -Ijni -Isrc/main/native -Isrc/main/native/common -Isrc/main/native/legacy \
-              -std=c99 \
-              -o ${OUT_DIR}/libzstd-jni-${VER}.so \
-              src/main/native/*.c src/main/native/legacy/*.c src/main/native/common/*.c src/main/native/compress/*.c src/main/native/decompress/*.[cS] src/main/native/dictBuilder/*.c
-          done
+          if [ ! -f gradlew ]; then
+            echo "Gradle wrapper missing, generating..."
+            gradle wrapper
+          fi
+          chmod +x gradlew
 
-      - name: SBT编译项目并执行AAR打包任务
-        run: ./sbt "compile; aarTask"
+      - name: 构建 Android AAR
+        run: |
+          # 确保在项目根目录执行，指向 android 模块
+          ./gradlew :android:assembleRelease
 
-      - name: 查看生成的Android AAR产物
-        run: ls -la target/aar/*.aar
+      - name: 查看生成的 AAR 文件
+        run: |
+          find . -name "*.aar" -type f
 
-      - name: 上传Android AAR包至AWS S3(仅master分支生效)
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'}}
+      - name: 上传 Android AAR 到 AWS S3（仅 master 分支）
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: "us-east-1"
         run: |
-          nativeVer=$(cat version)
-          aws s3 cp target/aar/zstd-jni.aar s3://zstd-jni/github/android/zstd-jni-${nativeVer}.aar
+          AAR_FILE=$(find android/build/outputs/aar -name "*.aar" | head -1)
+          if [ -f "$AAR_FILE" ]; then
+            nativeVer=$(cat version)
+            aws s3 cp "$AAR_FILE" "s3://zstd-jni/github/android/zstd-jni-${nativeVer}.aar"
+          else
+            echo "No AAR file found"
+            exit 1
+          fi
