@@ -199,25 +199,31 @@ jobs:
           AWS_DEFAULT_REGION: "us-east-1"
         run: aws s3 cp libzstd-jni-$(cat version).dll s3://zstd-jni/github/win/aarch64/libzstd-jni-$(cat version).dll
 
-  # Android 编译任务（使用 Gradle 5.1.1 + CMake 构建 AAR）
+  # Android 编译任务（使用 JDK 17 初始化 SDK，JDK 11 运行 Gradle）
   android:
     runs-on: ubuntu-latest
     steps:
       - name: 检出项目源码
         uses: actions/checkout@v5
 
-      - name: 配置Java21编译环境
+      # 步骤1: 安装 JDK 17 用于 Android SDK 管理器（需要 JDK 17+）
+      - name: 配置Java17环境（用于 setup-android）
         uses: actions/setup-java@v5
         with:
-          java-version: 11
+          java-version: 17
           distribution: zulu
 
       - name: 初始化Android SDK + NDK
         uses: android-actions/setup-android@v3
         with:
-          api-level: 33
-          build-tools: "34.0.0"
-          ndk-version: "26.2.11394342"
+          packages: "platforms;android-33 build-tools;34.0.0 ndk;26.2.11394342"
+
+      # 步骤2: 切换回 Java 11 用于 Gradle 5.x 构建
+      - name: 配置Java11环境（用于 Gradle 5.x）
+        uses: actions/setup-java@v5
+        with:
+          java-version: 11
+          distribution: zulu
 
       - name: 修复 build.gradle 以兼容新版 NDK 和依赖仓库
         run: |
@@ -244,7 +250,6 @@ jobs:
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           EOF
-          # 如果已经存在 gradlew，保留；否则从 Gradle 5.1.1 下载生成
           if [ ! -f gradlew ]; then
             curl -L https://raw.githubusercontent.com/gradle/gradle/v5.1.1/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
             curl -L https://raw.githubusercontent.com/gradle/gradle/v5.1.1/gradlew -o gradlew
